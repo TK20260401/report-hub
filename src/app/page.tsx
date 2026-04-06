@@ -1,46 +1,7 @@
 import { createClient } from "@/lib/supabase/server";
 import { redirect } from "next/navigation";
+import Link from "next/link";
 import LogoutButton from "./logout-button";
-
-// サンプルデータ（後日DBに切り替え）
-const sampleReports = [
-  {
-    date: "2026-04-06",
-    project: "備品管理台帳",
-    tasks: [
-      { name: "DB設計・マイグレーション", category: "設計", hours: 2.0, progress: 100 },
-      { name: "認証機能実装", category: "開発", hours: 1.5, progress: 100 },
-      { name: "レスポンシブ対応", category: "開発", hours: 1.0, progress: 80 },
-    ],
-    efficiencyAction: { description: "Claude Codeで認証テンプレート自動生成", hoursSaved: 1.5 },
-    knowledge: "Supabase RLSでメールベースの権限制御が簡潔に実装できる",
-    tomorrowPlan: "備品CRUDフォーム実装",
-  },
-  {
-    date: "2026-04-05",
-    project: "IPAS-Master",
-    tasks: [
-      { name: "問題データ追加（50問）", category: "開発", hours: 3.0, progress: 100 },
-      { name: "レーダーチャート改修", category: "開発", hours: 1.0, progress: 100 },
-      { name: "コードレビュー", category: "レビュー", hours: 0.5, progress: 100 },
-    ],
-    efficiencyAction: { description: "問題JSONの一括生成スクリプト作成", hoursSaved: 2.0 },
-    knowledge: "分野別の正答率を見せることで学習者の自己効力感が向上する",
-    tomorrowPlan: "用語フラッシュの追加・UI改善",
-  },
-  {
-    date: "2026-04-04",
-    project: "Logic-Riichi",
-    tasks: [
-      { name: "ランキング機能実装", category: "開発", hours: 2.5, progress: 100 },
-      { name: "テスト・デバッグ", category: "開発", hours: 1.0, progress: 100 },
-      { name: "チームMTG", category: "会議", hours: 1.0, progress: 100 },
-    ],
-    efficiencyAction: { description: "Supabaseビューで集計SQLをまとめた", hoursSaved: 0.5 },
-    knowledge: "ゲーミフィケーション要素（ランキング）は学習継続率に大きく寄与する",
-    tomorrowPlan: "待ち牌クイズのHardモード追加",
-  },
-];
 
 function CategoryBadge({ category }: { category: string }) {
   const styles: Record<string, string> = {
@@ -50,6 +11,7 @@ function CategoryBadge({ category }: { category: string }) {
     会議: "bg-yellow-100 text-yellow-800",
     レビュー: "bg-orange-100 text-orange-800",
     調査: "bg-cyan-100 text-cyan-800",
+    ドキュメント: "bg-indigo-100 text-indigo-800",
   };
   return (
     <span className={`inline-block rounded-full px-2 py-0.5 text-xs font-medium ${styles[category] ?? "bg-gray-100 text-gray-800"}`}>
@@ -66,13 +28,59 @@ export default async function Home() {
     redirect("/login");
   }
 
-  const totalHours = sampleReports.reduce(
-    (sum, r) => sum + r.tasks.reduce((s, t) => s + t.hours, 0), 0
-  );
-  const totalSaved = sampleReports.reduce(
-    (sum, r) => sum + r.efficiencyAction.hoursSaved, 0
-  );
-  const totalKnowledge = sampleReports.length;
+  // 日報一覧を取得
+  const { data: reports } = await supabase
+    .from("daily_reports")
+    .select("id, report_date, project_name, tomorrow_plan")
+    .eq("user_id", user.id)
+    .order("report_date", { ascending: false })
+    .limit(20);
+
+  // 各日報のタスク・工数削減・気づきを取得
+  const reportIds = (reports ?? []).map((r) => r.id);
+
+  const [tasksRes, actionsRes, notesRes] = await Promise.all([
+    reportIds.length > 0
+      ? supabase.from("daily_tasks").select("*").in("daily_report_id", reportIds)
+      : { data: [] },
+    reportIds.length > 0
+      ? supabase.from("efficiency_actions").select("*").in("daily_report_id", reportIds)
+      : { data: [] },
+    reportIds.length > 0
+      ? supabase.from("knowledge_notes").select("*").in("daily_report_id", reportIds)
+      : { data: [] },
+  ]);
+
+  type AnyRow = Record<string, unknown>;
+
+  const tasksByReport = new Map<string, AnyRow[]>();
+  (tasksRes.data ?? []).forEach((t: AnyRow) => {
+    const rid = t.daily_report_id as string;
+    if (!tasksByReport.has(rid)) tasksByReport.set(rid, []);
+    tasksByReport.get(rid)!.push(t);
+  });
+
+  const actionsByReport = new Map<string, AnyRow[]>();
+  (actionsRes.data ?? []).forEach((a: AnyRow) => {
+    const rid = a.daily_report_id as string;
+    if (!actionsByReport.has(rid)) actionsByReport.set(rid, []);
+    actionsByReport.get(rid)!.push(a);
+  });
+
+  const notesByReport = new Map<string, AnyRow[]>();
+  (notesRes.data ?? []).forEach((n: AnyRow) => {
+    const rid = n.daily_report_id as string;
+    if (!notesByReport.has(rid)) notesByReport.set(rid, []);
+    notesByReport.get(rid)!.push(n);
+  });
+
+  // 集計
+  const allTasks = (tasksRes.data ?? []) as AnyRow[];
+  const allActions = (actionsRes.data ?? []) as AnyRow[];
+  const totalHours = allTasks.reduce((sum: number, t) => sum + (Number(t.hours) || 0), 0);
+  const totalSaved = allActions.reduce((sum: number, a) => sum + (Number(a.hours_saved) || 0), 0);
+  const totalKnowledge = (notesRes.data ?? []).length;
+  const reportCount = (reports ?? []).length;
 
   return (
     <div className="flex min-h-full flex-col">
@@ -89,7 +97,7 @@ export default async function Home() {
         <div className="mb-6 grid grid-cols-2 gap-3 sm:grid-cols-4 sm:gap-4">
           <div className="rounded-lg border border-foreground/10 p-3 sm:p-4">
             <p className="text-xs text-foreground/50 sm:text-sm">日報数</p>
-            <p className="text-xl font-bold sm:text-2xl">{sampleReports.length}</p>
+            <p className="text-xl font-bold sm:text-2xl">{reportCount}</p>
           </div>
           <div className="rounded-lg border border-foreground/10 p-3 sm:p-4">
             <p className="text-xs text-foreground/50 sm:text-sm">総工数</p>
@@ -105,57 +113,87 @@ export default async function Home() {
           </div>
         </div>
 
-        {/* 見本ラベル */}
-        <div className="mb-4 flex items-center gap-2">
+        {/* 日報作成ボタン + 一覧ヘッダー */}
+        <div className="mb-4 flex items-center justify-between">
           <h2 className="text-sm font-semibold sm:text-base">日報一覧</h2>
-          <span className="rounded bg-blue-100 px-2 py-0.5 text-xs font-medium text-blue-700">
-            サンプルデータ
-          </span>
+          <Link
+            href="/reports/new"
+            className="rounded-md bg-foreground px-4 py-2 text-sm font-medium text-background hover:bg-foreground/90"
+          >
+            + 日報を書く
+          </Link>
         </div>
 
-        {/* 日報カード */}
-        <div className="space-y-4">
-          {sampleReports.map((report) => (
-            <div key={report.date} className="rounded-lg border border-foreground/10 p-4 sm:p-5">
-              <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-                <div className="flex items-center gap-3">
-                  <span className="font-mono text-sm font-medium">{report.date}</span>
-                  <span className="rounded bg-foreground/5 px-2 py-0.5 text-xs">{report.project}</span>
-                </div>
-                <span className="text-xs text-foreground/50">
-                  {report.tasks.reduce((s, t) => s + t.hours, 0)}h
-                </span>
-              </div>
+        {/* 日報一覧 */}
+        {reportCount === 0 ? (
+          <div className="flex flex-col items-center justify-center py-20 text-foreground/40">
+            <p className="mb-4 text-lg">まだ日報がありません</p>
+            <Link
+              href="/reports/new"
+              className="rounded-md bg-foreground px-6 py-3 text-sm font-medium text-background hover:bg-foreground/90"
+            >
+              最初の日報を書く
+            </Link>
+          </div>
+        ) : (
+          <div className="space-y-4">
+            {(reports ?? []).map((report) => {
+              const rTasks = tasksByReport.get(report.id) ?? [];
+              const rActions = actionsByReport.get(report.id) ?? [];
+              const rNotes = notesByReport.get(report.id) ?? [];
+              const dayHours = rTasks.reduce((s: number, t) => s + (Number(t.hours) || 0), 0);
 
-              <div className="mb-3 space-y-1">
-                {report.tasks.map((task, i) => (
-                  <div key={i} className="flex items-center gap-2 text-sm">
-                    <CategoryBadge category={task.category} />
-                    <span className="flex-1">{task.name}</span>
-                    <span className="text-foreground/50">{task.hours}h</span>
-                    <span className="w-12 text-right text-foreground/50">{task.progress}%</span>
+              return (
+                <div key={report.id} className="rounded-lg border border-foreground/10 p-4 sm:p-5">
+                  <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                    <div className="flex items-center gap-3">
+                      <span className="font-mono text-sm font-medium">{report.report_date}</span>
+                      <span className="rounded bg-foreground/5 px-2 py-0.5 text-xs">{report.project_name}</span>
+                    </div>
+                    <span className="text-xs text-foreground/50">{dayHours}h</span>
                   </div>
-                ))}
-              </div>
 
-              <div className="space-y-1 border-t border-foreground/5 pt-3 text-sm">
-                <div className="flex items-start gap-2">
-                  <span className="shrink-0 rounded bg-green-100 px-1.5 py-0.5 text-xs font-medium text-green-700">削減</span>
-                  <span>{report.efficiencyAction.description}</span>
-                  <span className="ml-auto shrink-0 font-medium text-green-600">-{report.efficiencyAction.hoursSaved}h</span>
-                </div>
-                <div className="flex items-start gap-2">
-                  <span className="shrink-0 rounded bg-purple-100 px-1.5 py-0.5 text-xs font-medium text-purple-700">知見</span>
-                  <span className="text-foreground/70">{report.knowledge}</span>
-                </div>
-              </div>
+                  {rTasks.length > 0 && (
+                    <div className="mb-3 space-y-1">
+                      {rTasks.map((task: AnyRow) => (
+                        <div key={task.id as string} className="flex items-center gap-2 text-sm">
+                          <CategoryBadge category={task.category as string} />
+                          <span className="flex-1">{task.task_name as string}</span>
+                          <span className="text-foreground/50">{String(task.hours)}h</span>
+                          <span className="w-12 text-right text-foreground/50">{String(task.progress)}%</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
 
-              <div className="mt-2 text-xs text-foreground/40">
-                明日の予定: {report.tomorrowPlan}
-              </div>
-            </div>
-          ))}
-        </div>
+                  {(rActions.length > 0 || rNotes.length > 0) && (
+                    <div className="space-y-1 border-t border-foreground/5 pt-3 text-sm">
+                      {rActions.map((action: AnyRow) => (
+                        <div key={action.id as string} className="flex items-start gap-2">
+                          <span className="shrink-0 rounded bg-green-100 px-1.5 py-0.5 text-xs font-medium text-green-700">削減</span>
+                          <span>{action.description as string}</span>
+                          <span className="ml-auto shrink-0 font-medium text-green-600">-{String(action.hours_saved)}h</span>
+                        </div>
+                      ))}
+                      {rNotes.map((note: AnyRow) => (
+                        <div key={note.id as string} className="flex items-start gap-2">
+                          <span className="shrink-0 rounded bg-purple-100 px-1.5 py-0.5 text-xs font-medium text-purple-700">知見</span>
+                          <span className="text-foreground/70">{note.content as string}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  {report.tomorrow_plan && (
+                    <div className="mt-2 text-xs text-foreground/40">
+                      明日の予定: {report.tomorrow_plan}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
       </main>
     </div>
   );
