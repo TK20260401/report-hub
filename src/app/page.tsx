@@ -150,7 +150,15 @@ export default async function Home() {
                       <span className="font-mono text-sm font-medium">{report.report_date}</span>
                       <span className="rounded bg-foreground/5 px-2 py-0.5 text-xs">{report.project_name}</span>
                     </div>
-                    <span className="text-xs text-foreground/50">{dayHours}h</span>
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs text-foreground/50">{dayHours}h</span>
+                      <Link
+                        href={`/reports/${report.id}/edit`}
+                        className="rounded border border-foreground/20 px-2 py-1 text-xs text-foreground/60 hover:bg-foreground/5"
+                      >
+                        編集
+                      </Link>
+                    </div>
                   </div>
 
                   {rTasks.length > 0 && (
